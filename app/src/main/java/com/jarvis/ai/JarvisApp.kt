@@ -871,3 +871,4 @@ class MainActivity : Activity() {
         tts?.shutdown()
         super.onDestroy()
     }
+}
