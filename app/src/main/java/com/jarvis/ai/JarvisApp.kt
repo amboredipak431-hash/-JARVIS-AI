@@ -37,6 +37,8 @@ class MainActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
     private lateinit var status: TextView
+    private lateinit var chatView: TextView
+    private lateinit var scrollView: ScrollView
     private lateinit var input: EditText
     private lateinit var langButton: Button
     private lateinit var modeButton: Button
@@ -48,6 +50,7 @@ class MainActivity : Activity() {
     private var studyMode = false
     private var lengthMode = 1
     private var lastAnswer = ""
+    private val chatLog = StringBuilder()
     private val history = ArrayList<Pair<String, String>>()
     private val speechCode = 101
 
@@ -96,11 +99,49 @@ class MainActivity : Activity() {
         return r
     }
 
+    private fun saveHistory() {
+        val arr = JSONArray()
+        for (p in history) {
+            arr.put(JSONArray().put(p.first).put(p.second))
+        }
+        prefs.edit().putString("history", arr.toString()).apply()
+    }
+
+    private fun loadHistory() {
+        try {
+            val s = prefs.getString("history", "") ?: ""
+            if (s.isEmpty()) return
+            val arr = JSONArray(s)
+            for (k in 0 until arr.length()) {
+                val p = arr.getJSONArray(k)
+                history.add(Pair(p.getString(0), p.getString(1)))
+            }
+        } catch (e: Exception) {
+            history.clear()
+        }
+    }
+
+    private fun addChat(who: String, text: String) {
+        chatLog.append(who).append(": ").append(text).append("\n\n")
+        if (chatLog.length > 8000) {
+            chatLog.delete(0, chatLog.length - 8000)
+            val cut = chatLog.indexOf("\n\n")
+            if (cut >= 0 && cut + 2 < chatLog.length) {
+                chatLog.delete(0, cut + 2)
+            }
+        }
+        prefs.edit().putString("chat", chatLog.toString()).apply()
+        chatView.text = chatLog.toString()
+        scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("jarvis", Context.MODE_PRIVATE)
         marathi = prefs.getBoolean("marathi", true)
         lengthMode = prefs.getInt("length", 1)
+        loadHistory()
+        chatLog.append(prefs.getString("chat", "") ?: "")
 
         tts = TextToSpeech(this) { s ->
             ttsReady = (s == TextToSpeech.SUCCESS)
@@ -135,18 +176,25 @@ class MainActivity : Activity() {
         val saveKey = Button(this)
         saveKey.text = "SAVE KEY"
 
+        chatView = TextView(this)
+        chatView.textSize = 17f
+        chatView.setTextColor(Color.GREEN)
+        chatView.setPadding(0, 20, 0, 20)
+        chatView.text = chatLog.toString()
+
+        scrollView = ScrollView(this)
+        scrollView.addView(chatView)
+        scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
+
         status = TextView(this)
-        status.textSize = 17f
-        status.setTextColor(Color.GREEN)
-        status.setPadding(0, 30, 0, 30)
+        status.textSize = 14f
+        status.setTextColor(Color.YELLOW)
+        status.setPadding(0, 10, 0, 10)
         status.text = if (prefs.getString("key", "").isNullOrEmpty()) {
             "First save your Gemini key"
         } else {
             "JARVIS is ready"
         }
-
-        val scroll = ScrollView(this)
-        scroll.addView(status)
 
         input = EditText(this)
         input.hint = "Ask JARVIS anything..."
@@ -213,9 +261,10 @@ class MainActivity : Activity() {
         layout.addView(keyInput)
         layout.addView(saveKey)
         layout.addView(
-            scroll,
+            scrollView,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
+        layout.addView(status)
         layout.addView(input)
         layout.addView(makeRow(send, mic, stop))
 
@@ -261,7 +310,6 @@ class MainActivity : Activity() {
             val results = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
             val spoken = if (results != null && results.isNotEmpty()) results[0] else ""
             if (spoken.isNotEmpty()) {
-                input.setText(spoken)
                 handle(spoken)
             }
         }
@@ -279,10 +327,13 @@ class MainActivity : Activity() {
     }
 
     private fun show(text: String, speakIt: Boolean) {
-        status.text = text
         if (speakIt) {
             lastAnswer = text
+            status.text = ""
+            addChat("JARVIS", text)
             speak(text)
+        } else {
+            status.text = text
         }
     }
 
@@ -402,13 +453,25 @@ class MainActivity : Activity() {
         val base = if (lengthMode == 0) 60 else if (lengthMode == 2) 250 else 100
         val limit = if (study) base * 2 else base
         val today = SimpleDateFormat("EEEE, d MMMM yyyy, hh:mm a", Locale.ENGLISH).format(Date())
-        var s = "You are JARVIS, a calm and polite personal assistant for a nursing student (GNM course) in India. " +
+        val notes = (prefs.getString("notes", "") ?: "").takeLast(3000)
+        var s = "You are JARVIS, a calm, polite and friendly personal assistant. " +
             "Today is " + today + ". Reply in simple " + lang + " with short sentences and very simple words. " +
             "Keep the answer under " + limit + " words. Do not use markdown, stars or hashtags. " +
-            "For doses and treatment, always say to check with the textbook or teacher. " +
-            "You cannot control the phone yourself."
+            "Answer only what the user asked. Do not bring up studies, nursing, exams or textbooks unless the user does. " +
+            "Do not add medical warnings or disclaimers yourself. " +
+            "For a simple greeting, just greet back in one short sentence. " +
+            "You cannot control the phone yourself. " +
+            "Background: the user is a first-year GNM nursing student in India. Use this only when the question is about studies."
+        if (notes.isNotEmpty()) {
+            s += " Things the user asked you to remember (use them when relevant): " + notes.replace("\n", "; ")
+        }
+        s += " If the user tells you something personal and important to remember " +
+            "(name, exam date, deadline, goal, family or friend details), " +
+            "add one extra last line exactly like this: SAVE: <short fact>. " +
+            "Never save passwords, OTPs, bank or payment details. Never mention the SAVE line."
         if (study) {
-            s += " You are now a kind nursing tutor. When the student names a topic: first explain it simply, " +
+            s += " The user is in STUDY mode, so studies are the topic now. You are a kind nursing tutor. " +
+                "When the student names a topic: first explain it simply, " +
                 "then give 5 important points, then ask 5 questions. " +
                 "If the student is answering your questions, check the answers kindly and give the correct answers briefly."
         }
@@ -514,16 +577,39 @@ class MainActivity : Activity() {
                 if (finalAnswer.isEmpty()) {
                     status.text = "Error: " + err
                 } else {
-                    history.add(Pair(question, finalAnswer))
+                    val keep = ArrayList<String>()
+                    val facts = ArrayList<String>()
+                    for (ln in finalAnswer.split("\n")) {
+                        val tl = ln.trim()
+                        if (tl.startsWith("SAVE:", ignoreCase = true)) {
+                            val f = tl.substring(5).trim()
+                            if (f.isNotEmpty()) facts.add(f)
+                        } else {
+                            keep.add(ln)
+                        }
+                    }
+                    var cleaned = keep.joinToString("\n").trim()
+                    if (cleaned.isEmpty()) {
+                        cleaned = say("ठीक आहे.", "Okay.")
+                    }
+                    history.add(Pair(question.take(400), cleaned))
                     while (history.size > 6) {
                         history.removeAt(0)
                     }
-                    var shown = finalAnswer
+                    saveHistory()
+                    var shown = cleaned
                     if (disclaimer) {
                         shown += "\n\n" + say(
                             "डोस आणि उपचार textbook किंवा शिक्षकांकडून तपासा.",
                             "Check doses and treatment with your textbook or teacher."
                         )
+                    }
+                    if (!search) {
+                        for (f in facts.take(3)) {
+                            val fact = f.take(200)
+                            saveNote(fact)
+                            shown += "\n\n" + say("नोट सेव केली: ", "Note saved: ") + fact
+                        }
                     }
                     show(shown, true)
                 }
@@ -544,6 +630,9 @@ class MainActivity : Activity() {
         }
         val t = normDigits(raw).lowercase(Locale.ROOT).trim()
         if (t.isEmpty()) return
+
+        addChat("You", raw.trim())
+        input.setText("")
 
         // Master off by voice
         if (has(t, "सगळं बंद", "सगळे बंद", "सर्व बंद", "stop everything", "privacy mode", "प्रायव्हसी मोड")) {
@@ -602,6 +691,74 @@ class MainActivity : Activity() {
                 ),
                 true
             )
+            return
+        }
+
+        // Message on WhatsApp / Instagram: JARVIS only prepares it, you press Send
+        val isWa = has(t, "whatsapp", "व्हॉट्सअ", "व्हाट्सअ", "व्हॉट्स अ", "व्हाट्स अ")
+        val isIg = has(t, "instagram", "insta", "इन्स्टा", "इंस्टा")
+        val msgWord = has(t, "msg", "message", "मेसेज", "मॅसेज", "मेसज", "संदेश", "पाठव", "send")
+        if ((isWa || isIg) && msgWord) {
+            val rt = raw.trim()
+            var msg = ""
+            var best = -1
+            var bestLen = 0
+            for (mk in listOf(" की ", " म्हणून ", " saying ", " that ", ":")) {
+                var ix = t.indexOf(mk)
+                if (mk == ":" && ix > 0 && t[ix - 1].isDigit()) {
+                    ix = -1
+                }
+                if (ix >= 0 && (best < 0 || ix < best)) {
+                    best = ix
+                    bestLen = mk.length
+                }
+            }
+            if (best >= 0 && best + bestLen <= rt.length) {
+                msg = rt.substring(best + bestLen).trim()
+            }
+            val nm = Regex("\\+?[0-9][0-9 \\-]{7,}[0-9]").find(t)
+            var digits = ""
+            if (nm != null) {
+                digits = nm.value.replace(Regex("[^0-9]"), "")
+                if (digits.length == 10) digits = "91" + digits
+            }
+            val finalMsg = msg
+            val finalDigits = digits
+            val igOnly = isIg && !isWa
+            val appName = if (igOnly) "Instagram" else "WhatsApp"
+            val ask = say(
+                appName + " उघडून संदेश तयार ठेवू का?",
+                "Open " + appName + " with the message ready?"
+            ) + (if (finalMsg.isNotEmpty()) "\n\n" + finalMsg else "") +
+                "\n\n" + say("Send तू स्वतः दाबायचं.", "You press Send yourself.")
+            confirm(ask) {
+                val okMsg = say("उघडतो. Send तू दाब.", "Opening. You press Send.")
+                if (igOnly) {
+                    if (finalMsg.isNotEmpty()) {
+                        val i = Intent(Intent.ACTION_SEND)
+                        i.type = "text/plain"
+                        i.putExtra(Intent.EXTRA_TEXT, finalMsg)
+                        i.setPackage("com.instagram.android")
+                        launch(i, okMsg)
+                    } else {
+                        openPackage("com.instagram.android", "https://www.instagram.com")
+                    }
+                } else if (finalDigits.isNotEmpty()) {
+                    val link = "https://wa.me/" + finalDigits +
+                        (if (finalMsg.isNotEmpty()) "?text=" + Uri.encode(finalMsg) else "")
+                    val i = Intent(Intent.ACTION_VIEW, Uri.parse(link))
+                    i.setPackage("com.whatsapp")
+                    launch(i, okMsg)
+                } else if (finalMsg.isNotEmpty()) {
+                    val i = Intent(Intent.ACTION_SEND)
+                    i.type = "text/plain"
+                    i.putExtra(Intent.EXTRA_TEXT, finalMsg)
+                    i.setPackage("com.whatsapp")
+                    launch(i, okMsg)
+                } else {
+                    openPackage("com.whatsapp", "https://web.whatsapp.com")
+                }
+            }
             return
         }
 
@@ -757,13 +914,15 @@ class MainActivity : Activity() {
         ) {
             confirm(
                 say(
-                    "तुझ्या सगळ्या notes आणि key फोनमधून पुसू का?",
-                    "Delete all your notes and the key from this phone?"
+                    "तुझ्या सगळ्या notes, गप्पा आणि key फोनमधून पुसू का?",
+                    "Delete all your notes, chats and the key from this phone?"
                 )
             ) {
                 prefs.edit().clear().apply()
                 history.clear()
                 lastAnswer = ""
+                chatLog.setLength(0)
+                chatView.text = ""
                 show(say("सगळी माहिती पुसली. Key पुन्हा टाक.", "All data deleted. Please save the key again."), false)
             }
             return
