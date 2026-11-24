@@ -3,8 +3,14 @@ package com.jarvis.ai
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
+import android.view.MotionEvent
+import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 
 class JarvisApplication : Application() {
 
@@ -19,6 +25,10 @@ class JarvisApplication : Application() {
                     val layout = content?.getChildAt(0) as? LinearLayout
                     if (layout != null) {
                         applyCleanUi(activity, layout)
+                        try {
+                            hookPhoneCommands(activity, layout)
+                        } catch (e: Exception) {
+                        }
                     }
                 }
             }
@@ -29,5 +39,43 @@ class JarvisApplication : Application() {
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
             override fun onActivityDestroyed(activity: Activity) {}
         })
+    }
+
+    private fun collect(v: View, out: MutableList<View>) {
+        out.add(v)
+        if (v is ViewGroup) {
+            for (i in 0 until v.childCount) {
+                collect(v.getChildAt(i), out)
+            }
+        }
+    }
+
+    // Send बटण दाबले की आधी फोन कमांड (YouTube) तपासतो. कमांड नसेल तर जुने काम चालू राहते.
+    private fun hookPhoneCommands(activity: Activity, root: View) {
+        val all = ArrayList<View>()
+        collect(root, all)
+        val send = all.firstOrNull { it is Button && it.contentDescription?.toString() == "Send" } as? Button ?: return
+        if (send.tag == "cmd-hooked") return
+        val input = all.firstOrNull {
+            it is EditText && (it.hint?.toString() ?: "").startsWith("JARVIS")
+        } as? EditText ?: return
+        val scroll = all.firstOrNull { it is ScrollView && it.childCount == 1 && it.getChildAt(0) is TextView } as? ScrollView
+        val chat = scroll?.getChildAt(0) as? TextView
+        send.tag = "cmd-hooked"
+        send.setOnTouchListener { v, ev ->
+            if (ev.action == MotionEvent.ACTION_UP) {
+                val text = input.text.toString().trim()
+                if (text.isNotEmpty()) {
+                    val reply = PhoneCommands.handle(activity, text)
+                    if (reply != null) {
+                        input.setText("")
+                        chat?.append("\n\nतुम्ही: " + text + "\nJARVIS: " + reply)
+                        v.isPressed = false
+                        return@setOnTouchListener true
+                    }
+                }
+            }
+            false
+        }
     }
 }
