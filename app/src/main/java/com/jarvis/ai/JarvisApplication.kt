@@ -1,4 +1,4 @@
-package com.jarvis.ai
+ package com.jarvis.ai
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.text.Editable
+import android.util.Xml
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.MotionEvent
@@ -14,12 +15,16 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import org.xmlpull.v1.XmlPullParser
+import java.net.HttpURLConnection
+import java.net.URL
 
 class JarvisApplication : Application() {
 
@@ -98,6 +103,13 @@ class JarvisApplication : Application() {
             if (ev.action == MotionEvent.ACTION_UP) {
                 val text = input.text.toString().trim()
                 if (text.isNotEmpty()) {
+                    if (isNewsRequest(text)) {
+                        input.setText("")
+                        chat?.append("\n\nतुम्ही: " + text + "\nJARVIS: बातम्या आणत आहे…")
+                        fetchNews(activity, chat, text)
+                        v.isPressed = false
+                        return@setOnTouchListener true
+                    }
                     val reply = PhoneCommands.handle(activity, text)
                     if (reply != null) {
                         input.setText("")
@@ -154,6 +166,11 @@ class JarvisApplication : Application() {
 
         val all = ArrayList<View>()
         collect(layout, all)
+        for (v in all) {
+            if (v is HorizontalScrollView && v.childCount > 0) {
+                v.getChildAt(0).visibility = View.GONE
+            }
+        }
         val scroll = all.firstOrNull { it is ScrollView && it.childCount == 1 && it.getChildAt(0) is TextView } as? ScrollView
         val chat = scroll?.getChildAt(0) as? TextView
         chat?.addTextChangedListener(object : TextWatcher {
@@ -241,5 +258,110 @@ class JarvisApplication : Application() {
             }
             .setPositiveButton("बंद", null)
             .show()
+    }
+
+    // ---------- आजच्या बातम्या (Google News, मराठी) ----------
+
+    private fun isNewsRequest(text: String): Boolean {
+        val t = text.lowercase()
+        if (t.length > 60) return false
+        return t.contains("बातम्या") || t.contains("बातमी") || t.contains("news")
+    }
+
+    private fun fetchNews(activity: Activity, chat: TextView?, request: String) {
+        Thread {
+            var result: String? = null
+            try {
+                val key = activity.getSharedPreferences("jarvis", Context.MODE_PRIVATE).getString("key", "") ?: ""
+                if (key.isNotEmpty()) {
+                    result = detailedNews(key, request)
+                }
+            } catch (e: Exception) {
+            }
+            if (result == null) {
+                result = headlines()
+            }
+            val out: String = result
+            activity.runOnUiThread {
+                chat?.append("\n" + out)
+            }
+        }.start()
+    }
+
+    // Gemini + Google Search: आजच्या खऱ्या बातम्या, सविस्तर, मराठीत
+    private fun detailedNews(key: String, request: String): String? {
+        val today = java.text.SimpleDateFormat("d MMMM yyyy", java.util.Locale.ENGLISH).format(java.util.Date())
+        val prompt = "आजची तारीख: " + today + ". वापरकर्त्याची विनंती: \"" + request + "\". " +
+            "Google Search वापरून आजच्या सर्वात ताज्या आणि महत्त्वाच्या 5 बातम्या शोधा " +
+            "(विनंतीत विषय असेल तर त्या विषयाच्या, नाहीतर भारत आणि महाराष्ट्राच्या). " +
+            "प्रत्येक बातमीला शीर्षक द्या आणि 3-4 वाक्यांत सविस्तर माहिती द्या. " +
+            "सोप्या मराठीत देवनागरी लिपीत लिहा. शेवटी स्रोताचे नाव द्या."
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
+            .put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+            .toString()
+        val models = listOf("gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash")
+        for (m in models) {
+            try {
+                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent?key=" + key)
+                val c = url.openConnection() as HttpURLConnection
+                c.requestMethod = "POST"
+                c.connectTimeout = 10000
+                c.readTimeout = 45000
+                c.doOutput = true
+                c.setRequestProperty("Content-Type", "application/json")
+                c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                if (c.responseCode != 200) continue
+                val resp = c.inputStream.bufferedReader(Charsets.UTF_8).readText()
+                val parts = JSONObject(resp).getJSONArray("candidates").getJSONObject(0)
+                    .getJSONObject("content").getJSONArray("parts")
+                val sb = StringBuilder()
+                for (i in 0 until parts.length()) {
+                    sb.append(parts.getJSONObject(i).optString("text", ""))
+                }
+                val t = sb.toString().trim()
+                if (t.isNotEmpty()) return t
+            } catch (e: Exception) {
+            }
+        }
+        return null
+    }
+
+    // Gemini चालले नाही तर फक्त हेडलाइन (Google News RSS)
+    private fun headlines(): String {
+        return try {
+            val c = URL("https://news.google.com/rss?hl=mr&gl=IN&ceid=IN:mr").openConnection() as HttpURLConnection
+            c.connectTimeout = 8000
+            c.readTimeout = 8000
+            c.setRequestProperty("User-Agent", "Mozilla/5.0")
+            val parser = Xml.newPullParser()
+            parser.setInput(c.inputStream, null)
+            val titles = ArrayList<String>()
+            var inItem = false
+            var ev = parser.eventType
+            while (ev != XmlPullParser.END_DOCUMENT && titles.size < 5) {
+                if (ev == XmlPullParser.START_TAG) {
+                    if (parser.name == "item") {
+                        inItem = true
+                    } else if (inItem && parser.name == "title") {
+                        titles.add(parser.nextText().trim())
+                    }
+                } else if (ev == XmlPullParser.END_TAG && parser.name == "item") {
+                    inItem = false
+                }
+                ev = parser.next()
+            }
+            if (titles.isEmpty()) {
+                "आत्ता बातम्या मिळाल्या नाहीत. थोड्या वेळाने पुन्हा सांगा."
+            } else {
+                val sb = StringBuilder("आजच्या ताज्या बातम्या (फक्त हेडलाइन):")
+                for ((i, t) in titles.withIndex()) {
+                    sb.append("\n").append(i + 1).append(". ").append(t)
+                }
+                sb.toString()
+            }
+        } catch (e: Exception) {
+            "बातम्या आणता आल्या नाहीत. इंटरनेट तपासा."
+        }
     }
 }
