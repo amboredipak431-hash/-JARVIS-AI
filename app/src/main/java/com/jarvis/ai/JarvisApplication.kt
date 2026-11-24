@@ -29,6 +29,10 @@ class JarvisApplication : Application() {
                             hookPhoneCommands(activity, layout)
                         } catch (e: Exception) {
                         }
+                        try {
+                            hideRings(layout)
+                        } catch (e: Exception) {
+                        }
                     }
                 }
             }
@@ -46,6 +50,17 @@ class JarvisApplication : Application() {
         if (v is ViewGroup) {
             for (i in 0 until v.childCount) {
                 collect(v.getChildAt(i), out)
+            }
+        }
+    }
+
+    // निळ्या रिंग (HUD) लपवतो. काढून टाकायचे असल्यास हेच फंक्शन वापरले आहे.
+    private fun hideRings(root: View) {
+        val all = ArrayList<View>()
+        collect(root, all)
+        for (v in all) {
+            if (v.javaClass.simpleName == "HudView") {
+                v.alpha = 0f
             }
         }
     }
