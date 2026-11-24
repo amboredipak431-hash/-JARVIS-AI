@@ -10,6 +10,7 @@ import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -20,6 +21,7 @@ import android.speech.tts.TextToSpeech
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
+import android.text.method.TransformationMethod
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -27,6 +29,7 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -85,6 +88,43 @@ private fun styleIcon(b: Button, label: String, size: Float) {
     g.shape = GradientDrawable.OVAL
     g.setColor(Color.TRANSPARENT)
     b.background = ripple(g)
+}
+
+// Shows "MODE: NORMAL" as "Mode  ·  Normal" (only on screen, the real text is not changed)
+private class PrettyText : TransformationMethod {
+    private fun nice(x: String): String {
+        val t = x.trim().lowercase()
+        return if (t.isEmpty()) t else t.substring(0, 1).uppercase() + t.substring(1)
+    }
+
+    override fun getTransformation(source: CharSequence?, view: View?): CharSequence {
+        val s = source?.toString() ?: ""
+        val i = s.indexOf(": ")
+        return if (i < 0) nice(s) else nice(s.substring(0, i)) + "  ·  " + nice(s.substring(i + 2))
+    }
+
+    override fun onFocusChanged(
+        view: View?,
+        sourceText: CharSequence?,
+        focused: Boolean,
+        direction: Int,
+        previouslyFocusedRect: Rect?
+    ) {
+    }
+}
+
+private fun styleRow(b: Button, d: Float) {
+    flatten(b)
+    b.transformationMethod = PrettyText()
+    b.textSize = 15f
+    b.setTextColor(Color.parseColor("#C9D6E4"))
+    b.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+    val h = (16 * d).toInt()
+    val v = (14 * d).toInt()
+    b.setPadding(h, v, h, v)
+    val g = GradientDrawable()
+    g.setColor(Color.TRANSPARENT)
+    b.background = RippleDrawable(ColorStateList.valueOf(Color.parseColor("#22FFFFFF")), g, null)
 }
 
 // ---------- Clean line icons ----------
@@ -234,6 +274,11 @@ private class HudView(context: Context) : View(context) {
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
+            if (visibility != View.VISIBLE) {
+                last = 0L
+                this@HudView.postDelayed(this, 300)
+                return
+            }
             val now = System.nanoTime()
             val dt = if (last == 0L) 0.016f else min(0.05f, (now - last) / 1_000_000_000f)
             last = now
@@ -395,7 +440,15 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
     val status = layout.getChildAt(6) as? TextView ?: return
     val inputRow = layout.getChildAt(7) as? LinearLayout ?: return
     val actionRow = layout.getChildAt(8) as? LinearLayout ?: return
+    if (rowA.childCount != 2 || rowB.childCount != 2 || rowC.childCount != 3) return
     if (keyRow.childCount != 2 || inputRow.childCount != 3 || actionRow.childCount != 3) return
+    val master = rowA.getChildAt(0) as? Button ?: return
+    val mode = rowA.getChildAt(1) as? Button ?: return
+    val lang = rowB.getChildAt(0) as? Button ?: return
+    val length = rowB.getChildAt(1) as? Button ?: return
+    val newChat = rowC.getChildAt(0) as? Button ?: return
+    val history = rowC.getChildAt(1) as? Button ?: return
+    val copy = rowC.getChildAt(2) as? Button ?: return
     val keyInput = keyRow.getChildAt(0) as? EditText ?: return
     val saveKey = keyRow.getChildAt(1) as? Button ?: return
     val input = inputRow.getChildAt(0) as? EditText ?: return
@@ -409,11 +462,6 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
     val prefs = act.getSharedPreferences("jarvis", Context.MODE_PRIVATE)
     val d = act.resources.displayMetrics.density
     fun dp(v: Int): Int = (v * d + 0.5f).toInt()
-    fun margin(v: View, l: Int, t: Int, r: Int, b: Int) {
-        val lp = v.layoutParams as? ViewGroup.MarginLayoutParams ?: return
-        lp.setMargins(dp(l), dp(t), dp(r), dp(b))
-        v.layoutParams = lp
-    }
 
     val cyan = Color.parseColor("#00E5FF")
     val soft = Color.parseColor("#C9D6E4")
@@ -424,17 +472,16 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
     layout.removeAllViews()
     inputRow.removeAllViews()
     actionRow.removeAllViews()
+    rowA.removeAllViews()
+    rowB.removeAllViews()
+    rowC.removeAllViews()
+    keyRow.removeAllViews()
     layout.setBackgroundColor(Color.parseColor("#0B0F14"))
     layout.setPadding(dp(16), dp(24), dp(16), dp(12))
 
     // ----- the moving rings -----
     val hud = HudView(act)
-    val screenH = act.resources.displayMetrics.heightPixels
-    val bigH = min(dp(300), (screenH * 0.34f).toInt())
-    val smallH = dp(130)
-    val hudLp = LinearLayout.LayoutParams(MP, bigH)
-    hudLp.setMargins(0, dp(6), 0, dp(4))
-    hud.layoutParams = hudLp
+    val smallH = dp(110)
 
     val ttsField = try {
         val f = act.javaClass.getDeclaredField("tts")
@@ -443,6 +490,25 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
     } catch (e: Exception) {
         null
     }
+
+    // ----- header -----
+    title.textSize = 20f
+    title.letterSpacing = 0.12f
+    title.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+    styleChip(stop, d)
+    stop.text = "■ Stop"
+    if (ttsField != null) {
+        stop.visibility = View.GONE
+    }
+    val gear = Button(act)
+    styleIcon(gear, "⚙", 20f)
+    val header = LinearLayout(act)
+    header.orientation = LinearLayout.HORIZONTAL
+    header.gravity = Gravity.CENTER_VERTICAL
+    header.addView(title, LinearLayout.LayoutParams(0, WC, 1f))
+    header.addView(stop, LinearLayout.LayoutParams(WC, WC))
+    header.addView(gear, LinearLayout.LayoutParams(dp(44), dp(44)))
+
     hud.stateProvider = {
         var st = 0
         if (status.text.toString().startsWith("JARVIS is thinking")) {
@@ -455,25 +521,18 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
             }
         } catch (e: Exception) {
         }
+        if (ttsField != null) {
+            stop.visibility = if (st == 2) View.VISIBLE else View.GONE
+        }
         st
     }
 
-    // ----- settings (opens over the chat) -----
-    for (row in listOf(rowA, rowB, rowC)) {
-        for (i in 0 until row.childCount) {
-            val v = row.getChildAt(i)
-            if (v is Button) {
-                styleChip(v, d)
-                margin(v, 3, 3, 3, 3)
-            }
-        }
+    // ----- settings page (opens only when the gear is tapped) -----
+    fun lp(top: Int): LinearLayout.LayoutParams {
+        val p = LinearLayout.LayoutParams(MP, WC)
+        p.setMargins(dp(3), dp(top), dp(3), 0)
+        return p
     }
-    keyInput.textSize = 14f
-    keyInput.setPadding(dp(12), dp(10), dp(12), dp(10))
-    keyInput.background = shape(Color.parseColor("#141C26"), 12 * d, line, (1 * d).toInt())
-    margin(keyInput, 3, 3, 3, 3)
-    styleChip(saveKey, d)
-    margin(saveKey, 3, 3, 3, 3)
 
     fun field(hint: String, saved: String, lines: Int): EditText {
         val e = EditText(act)
@@ -495,24 +554,75 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
         return e
     }
 
-    fun lp(top: Int): LinearLayout.LayoutParams {
-        val p = LinearLayout.LayoutParams(MP, WC)
-        p.setMargins(dp(3), dp(top), dp(3), 0)
-        return p
+    fun newCard(): LinearLayout {
+        val c = LinearLayout(act)
+        c.orientation = LinearLayout.VERTICAL
+        c.background = shape(Color.parseColor("#10161F"), 16 * d, Color.parseColor("#1E2A38"), (1 * d).toInt())
+        return c
+    }
+
+    fun section(text: String): TextView {
+        val t = TextView(act)
+        t.text = text
+        t.textSize = 12f
+        t.setTextColor(Color.parseColor("#8FA3B8"))
+        t.letterSpacing = 0.08f
+        t.setPadding(dp(6), dp(18), 0, dp(6))
+        return t
+    }
+
+    fun addRows(c: LinearLayout, rows: List<View>) {
+        for ((i, r) in rows.withIndex()) {
+            c.addView(r, LinearLayout.LayoutParams(MP, WC))
+            if (i < rows.size - 1) {
+                val dv = View(act)
+                dv.setBackgroundColor(line)
+                val p = LinearLayout.LayoutParams(MP, dp(1))
+                p.setMargins(dp(16), 0, 0, 0)
+                c.addView(dv, p)
+            }
+        }
+    }
+
+    for (b in listOf(master, mode, lang, length, newChat, history, copy)) {
+        styleRow(b, d)
     }
 
     val settingsTitle = TextView(act)
     settingsTitle.text = "सेटिंग्स"
-    settingsTitle.textSize = 16f
-    settingsTitle.setTextColor(soft)
+    settingsTitle.textSize = 20f
+    settingsTitle.setTextColor(Color.WHITE)
     settingsTitle.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-    settingsTitle.setPadding(dp(6), dp(4), 0, dp(6))
+    settingsTitle.setPadding(dp(6), dp(4), 0, dp(2))
 
-    val infoTitle = TextView(act)
-    infoTitle.text = "तुमची माहिती"
-    infoTitle.textSize = 15f
-    infoTitle.setTextColor(cyan)
-    infoTitle.setPadding(dp(6), dp(16), 0, dp(2))
+    val assistantCard = newCard()
+    addRows(assistantCard, listOf<View>(master, mode, lang, length))
+    val chatsCard = newCard()
+    addRows(chatsCard, listOf<View>(newChat, history, copy))
+
+    keyInput.textSize = 14f
+    keyInput.hint = "Gemini API key येथे paste करा"
+    keyInput.setPadding(dp(12), dp(10), dp(12), dp(10))
+    keyInput.background = shape(Color.parseColor("#141C26"), 12 * d, line, (1 * d).toInt())
+    styleChip(saveKey, d)
+    saveKey.text = "Key सेव करा"
+    val keyCaption = TextView(act)
+    keyCaption.textSize = 12f
+    keyCaption.setTextColor(Color.parseColor("#8FA3B8"))
+    fun refreshKeyCaption() {
+        val ok = (prefs.getString("key", "") ?: "").isNotEmpty()
+        keyCaption.text = if (ok) {
+            "✓ Key सेव आहे. नवीन टाकली तर जुनी बदलेल. ती फक्त तुमच्या फोनमध्ये राहते."
+        } else {
+            "Key अजून टाकलेली नाही. ती फक्त तुमच्या फोनमध्ये राहते."
+        }
+    }
+    refreshKeyCaption()
+    val keyCard = newCard()
+    keyCard.setPadding(dp(12), dp(12), dp(12), dp(12))
+    keyCard.addView(keyInput, LinearLayout.LayoutParams(MP, WC))
+    keyCard.addView(saveKey, lp(8))
+    keyCard.addView(keyCaption, lp(8))
 
     val infoNote = TextView(act)
     infoNote.text = "JARVIS तुम्हाला नावाने बोलवेल आणि तुमच्या कोर्सप्रमाणे समजावेल. " +
@@ -520,16 +630,13 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
         "Password, OTP आणि बँकेची माहिती टाकू नका."
     infoNote.textSize = 12f
     infoNote.setTextColor(Color.parseColor("#8FA3B8"))
-    infoNote.setPadding(dp(6), 0, dp(6), dp(4))
-
     val nameEt = field("तुमचं नाव", prefs.getString("pf_name", "") ?: "", 1)
     val courseEt = field("कोर्स आणि वर्ष (उदा. GNM, पहिलं वर्ष)", prefs.getString("pf_course", "") ?: "", 1)
     val cityEt = field("शहर किंवा गाव", prefs.getString("pf_city", "") ?: "", 1)
     val aboutEt = field("तुमच्याबद्दल आणखी काही (उदा. JARVIS ने कसं बोलावं)", prefs.getString("pf_about", "") ?: "", 3)
     val saveInfo = Button(act)
-    saveInfo.text = "SAVE INFO"
     styleChip(saveInfo, d)
-
+    saveInfo.text = "माहिती सेव करा"
     saveInfo.setOnClickListener {
         val nm = nameEt.text.toString().trim()
         val co = courseEt.text.toString().trim()
@@ -558,36 +665,52 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
             .apply()
         Toast.makeText(act, "माहिती सेव केली", Toast.LENGTH_SHORT).show()
     }
+    val infoCard = newCard()
+    infoCard.setPadding(dp(12), dp(12), dp(12), dp(12))
+    infoCard.addView(infoNote, LinearLayout.LayoutParams(MP, WC))
+    infoCard.addView(nameEt, lp(10))
+    infoCard.addView(courseEt, lp(8))
+    infoCard.addView(cityEt, lp(8))
+    infoCard.addView(aboutEt, lp(8))
+    infoCard.addView(saveInfo, lp(10))
+
+    val doneBtn = Button(act)
+    styleChip(doneBtn, d)
+    doneBtn.text = "बंद करा"
 
     val panel = LinearLayout(act)
     panel.orientation = LinearLayout.VERTICAL
-    panel.setPadding(dp(8), dp(8), dp(8), dp(24))
+    panel.setPadding(dp(4), dp(8), dp(4), dp(28))
     panel.addView(settingsTitle, LinearLayout.LayoutParams(MP, WC))
-    panel.addView(rowA, LinearLayout.LayoutParams(MP, WC))
-    panel.addView(rowB, LinearLayout.LayoutParams(MP, WC))
-    panel.addView(rowC, LinearLayout.LayoutParams(MP, WC))
-    panel.addView(keyRow, LinearLayout.LayoutParams(MP, WC))
-    panel.addView(infoTitle, LinearLayout.LayoutParams(MP, WC))
-    panel.addView(infoNote, LinearLayout.LayoutParams(MP, WC))
-    panel.addView(nameEt, lp(6))
-    panel.addView(courseEt, lp(8))
-    panel.addView(cityEt, lp(8))
-    panel.addView(aboutEt, lp(8))
-    panel.addView(saveInfo, lp(10))
+    panel.addView(section("असिस्टंट"), LinearLayout.LayoutParams(MP, WC))
+    panel.addView(assistantCard, LinearLayout.LayoutParams(MP, WC))
+    panel.addView(section("गप्पा"), LinearLayout.LayoutParams(MP, WC))
+    panel.addView(chatsCard, LinearLayout.LayoutParams(MP, WC))
+    panel.addView(section("API KEY"), LinearLayout.LayoutParams(MP, WC))
+    panel.addView(keyCard, LinearLayout.LayoutParams(MP, WC))
+    panel.addView(section("तुमची माहिती"), LinearLayout.LayoutParams(MP, WC))
+    panel.addView(infoCard, LinearLayout.LayoutParams(MP, WC))
+    panel.addView(doneBtn, lp(20))
 
     val settingsScroll = ScrollView(act)
     settingsScroll.setBackgroundColor(Color.parseColor("#0B0F14"))
     settingsScroll.addView(panel, ViewGroup.LayoutParams(MP, WC))
+    settingsScroll.visibility = View.GONE
 
     fun setSettings(show: Boolean) {
         settingsScroll.visibility = if (show) View.VISIBLE else View.GONE
         hud.visibility = if (show) View.GONE else View.VISIBLE
+        if (show) {
+            refreshKeyCaption()
+        }
     }
 
+    gear.setOnClickListener { setSettings(settingsScroll.visibility != View.VISIBLE) }
+    doneBtn.setOnClickListener { setSettings(false) }
+
     // New chat, History and Copy close the settings after a tap
-    for (i in 0 until rowC.childCount) {
-        val v = rowC.getChildAt(i)
-        v.setOnTouchListener { view, ev ->
+    for (b in listOf(newChat, history, copy)) {
+        b.setOnTouchListener { view, ev ->
             if (ev.action == MotionEvent.ACTION_UP) {
                 view.post { setSettings(false) }
             }
@@ -595,41 +718,11 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
         }
     }
 
-    // ----- header -----
-    title.textSize = 20f
-    title.letterSpacing = 0.12f
-    title.gravity = Gravity.START or Gravity.CENTER_VERTICAL
-    styleChip(stop, d)
-    stop.text = "■ Stop"
-    val gear = Button(act)
-    styleIcon(gear, "⚙", 20f)
-    gear.setOnClickListener {
-        setSettings(settingsScroll.visibility != View.VISIBLE)
-    }
-    val header = LinearLayout(act)
-    header.orientation = LinearLayout.HORIZONTAL
-    header.gravity = Gravity.CENTER_VERTICAL
-    header.addView(title, LinearLayout.LayoutParams(0, WC, 1f))
-    header.addView(stop, LinearLayout.LayoutParams(WC, WC))
-    header.addView(gear, LinearLayout.LayoutParams(dp(44), dp(44)))
-
-    // ----- chat area with a friendly empty screen -----
+    // ----- chat area: rings in the middle, suggestions at the bottom -----
     scroll.setBackgroundColor(Color.TRANSPARENT)
     chatView.textSize = 16f
-    chatView.setLineSpacing(0f, 1.2f)
-    val frame = FrameLayout(act)
-    frame.addView(scroll, FrameLayout.LayoutParams(MP, MP))
-
-    val empty = LinearLayout(act)
-    empty.orientation = LinearLayout.VERTICAL
-    empty.gravity = Gravity.CENTER_HORIZONTAL
-    val hello = TextView(act)
-    hello.text = "आज मी कशी मदत करू?"
-    hello.textSize = 18f
-    hello.setTextColor(soft)
-    hello.gravity = Gravity.CENTER
-    hello.setPadding(0, dp(4), 0, dp(12))
-    empty.addView(hello, LinearLayout.LayoutParams(MP, WC))
+    chatView.setLineSpacing(0f, 1.25f)
+    chatView.setPadding(dp(4), dp(12), dp(4), dp(12))
 
     fun chip(label: String, cmd: String): Button {
         val b = Button(act)
@@ -643,38 +736,46 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
         return b
     }
 
-    fun chipRow(a: Button, b: Button): LinearLayout {
-        val r = LinearLayout(act)
-        r.orientation = LinearLayout.HORIZONTAL
-        r.gravity = Gravity.CENTER
-        val lp1 = LinearLayout.LayoutParams(0, WC, 1f)
-        lp1.setMargins(dp(4), dp(4), dp(4), dp(4))
-        val lp2 = LinearLayout.LayoutParams(0, WC, 1f)
-        lp2.setMargins(dp(4), dp(4), dp(4), dp(4))
-        r.addView(a, lp1)
-        r.addView(b, lp2)
-        return r
+    val chipBox = LinearLayout(act)
+    chipBox.orientation = LinearLayout.HORIZONTAL
+    chipBox.setPadding(0, dp(4), 0, dp(8))
+    val chipTexts = listOf(
+        Pair("आजच्या बातम्या", "आजच्या बातम्या सांग"),
+        Pair("आजचा study plan", "आजचा study plan दे"),
+        Pair("किती वाजले", "आता किती वाजले"),
+        Pair("Torch चालू", "torch चालू कर")
+    )
+    for (c in chipTexts) {
+        val cp = LinearLayout.LayoutParams(WC, WC)
+        cp.setMargins(dp(4), 0, dp(4), 0)
+        chipBox.addView(chip(c.first, c.second), cp)
     }
+    val chips = HorizontalScrollView(act)
+    chips.isHorizontalScrollBarEnabled = false
+    chips.addView(chipBox, FrameLayout.LayoutParams(WC, WC))
 
-    empty.addView(
-        chipRow(chip("📰 आजच्या बातम्या", "आजच्या बातम्या सांग"), chip("📚 आजचा study plan", "आजचा study plan दे")),
-        LinearLayout.LayoutParams(MP, WC)
-    )
-    empty.addView(
-        chipRow(chip("🕒 किती वाजले", "आता किती वाजले"), chip("🔦 Torch चालू", "torch चालू कर")),
-        LinearLayout.LayoutParams(MP, WC)
-    )
-    frame.addView(empty, FrameLayout.LayoutParams(MP, WC, Gravity.CENTER))
+    val frame = FrameLayout(act)
+    frame.addView(hud, FrameLayout.LayoutParams(MP, MP, Gravity.CENTER))
+    frame.addView(scroll, FrameLayout.LayoutParams(MP, MP))
+    frame.addView(chips, FrameLayout.LayoutParams(MP, WC, Gravity.BOTTOM))
     frame.addView(settingsScroll, FrameLayout.LayoutParams(MP, MP))
 
-    // rings get big on the empty screen and small when the chat has started
+    // big centred rings on the empty screen, small rings on top once the chat starts
+    var hudMode = -1
     fun chatState(has: Boolean) {
-        empty.visibility = if (has) View.GONE else View.VISIBLE
-        val p = hud.layoutParams ?: return
-        val want = if (has) smallH else bigH
-        if (p.height != want) {
-            p.height = want
-            hud.layoutParams = p
+        val m = if (has) 1 else 0
+        if (m == hudMode) return
+        hudMode = m
+        chips.visibility = if (has) View.GONE else View.VISIBLE
+        hud.layoutParams = if (has) {
+            FrameLayout.LayoutParams(MP, smallH, Gravity.TOP)
+        } else {
+            FrameLayout.LayoutParams(MP, MP, Gravity.CENTER)
+        }
+        val sp = scroll.layoutParams as? FrameLayout.LayoutParams
+        if (sp != null) {
+            sp.topMargin = if (has) smallH + dp(4) else 0
+            scroll.layoutParams = sp
         }
     }
     chatState(chatView.text.isNotEmpty())
@@ -686,16 +787,43 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
         }
     })
 
-    // ----- status line -----
+    // ----- small status line: hidden when there is nothing to say -----
     status.textSize = 12f
     status.setTextColor(Color.parseColor("#E6B450"))
     status.setPadding(dp(4), dp(4), dp(4), dp(6))
+    fun syncStatus(t: CharSequence?) {
+        val s = t?.toString() ?: ""
+        if (s.isEmpty() || s == "JARVIS is ready") {
+            status.visibility = View.GONE
+            return
+        }
+        status.visibility = View.VISIBLE
+        if (!s.startsWith("JARVIS is thinking") && !s.startsWith("Error") && !s.startsWith("⚙")) {
+            status.postDelayed({
+                if (status.text.toString() == s) {
+                    status.visibility = View.GONE
+                }
+            }, 4000)
+        }
+    }
+    if (!hasKey) {
+        status.text = "⚙ दाबून Gemini API key टाका"
+    }
+    syncStatus(status.text)
+    status.addTextChangedListener(object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        override fun afterTextChanged(s: Editable?) {
+            syncStatus(s)
+        }
+    })
 
     // ----- bottom bar -----
     styleIconBtn(cam, 0, 40, d, Color.TRANSPARENT, soft)
     styleIconBtn(gal, 1, 40, d, Color.TRANSPARENT, soft)
     cam.contentDescription = "Camera"
     gal.contentDescription = "Gallery"
+    input.hint = "JARVIS ला काहीही विचारा..."
     input.background = null
     input.textSize = 16f
     input.maxLines = 4
@@ -726,10 +854,7 @@ private fun buildCleanUi(act: Activity, layout: LinearLayout) {
 
     // ----- put everything on the screen -----
     layout.addView(header, LinearLayout.LayoutParams(MP, WC))
-    layout.addView(hud)
     layout.addView(frame, LinearLayout.LayoutParams(MP, 0, 1f))
     layout.addView(status, LinearLayout.LayoutParams(MP, WC))
     layout.addView(bar, LinearLayout.LayoutParams(MP, WC))
-
-    setSettings(!hasKey)
 }
