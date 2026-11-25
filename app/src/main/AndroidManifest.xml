@@ -45,6 +45,11 @@
 
         </activity>
 
+        <provider
+            android:name=".MaleVoiceInit"
+            android:authorities="com.jarvis.ai.malevoiceinit"
+            android:exported="false" />
+
     </application>
 
 </manifest>
