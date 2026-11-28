@@ -927,12 +927,3 @@ private fun runGallery(act: Activity, cmd: MiniCmd, say: (String) -> Unit, mr: B
         .setNegativeButton("NO") { _, _ -> say(if (mr) "ठीक आहे सर, रद्द केलं." else "Okay Sir, cancelled.") }
         .show()
 }
-package com.jarvis.ai
-
-import android.app.Activity
-
-class MiniCmd
-
-fun jarvisParseMini(t: String): MiniCmd? = null
-
-fun jarvisRunMini(act: Activity, cmd: MiniCmd, say: (String) -> Unit, mr: Boolean) {}
